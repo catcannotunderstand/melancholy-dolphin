@@ -1,0 +1,21 @@
+{
+  "name": "melancholy-dolphin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Azure Container Apps の状態とコストを閲覧するだけの MCP サーバー(Claude のカスタムコネクタ用)",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@azure/identity": "^4.14.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3"
+  },
+  "engines": { "node": ">=22" }
+}
