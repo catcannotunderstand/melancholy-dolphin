@@ -40,7 +40,9 @@ echo "== アプリ"
 SECRET=$(az containerapp secret show -n "$APP" -g "$RG" --secret-name mcp-secret --query value -o tsv </dev/null 2>/dev/null || true)
 SECRET="${SECRET:-$(openssl rand -hex 20)}"
 if az containerapp show -n "$APP" -g "$RG" -o none 2>/dev/null; then
-  az containerapp identity assign -n "$APP" -g "$RG" --system-assigned -o none
+  if [ -z "$(az containerapp show -n "$APP" -g "$RG" --query identity.principalId -o tsv)" ]; then
+    az containerapp identity assign -n "$APP" -g "$RG" --system-assigned -o none
+  fi
   TARGETS=$(az containerapp show -n "$APP" -g "$RG" \
     --query "properties.template.containers[0].env[?name=='TARGETS'].value | [0]" -o tsv)
   TARGETS="${TARGETS:-$DEFAULT_TARGETS}"
@@ -54,6 +56,20 @@ else
     --ingress external --target-port 8080 -o none
 fi
 PRINCIPAL=$(az containerapp show -n "$APP" -g "$RG" --query identity.principalId -o tsv)
+
+wait_ready() {  # アプリの変更が Azure 側で終わるまで待つ(処理中は次の変更を受け付けないため)
+  for i in $(seq 1 60); do
+    st=$(az containerapp show -n "$APP" -g "$RG" --query properties.provisioningState -o tsv 2>/dev/null || echo "")
+    case "$st" in
+      Succeeded) return 0;;
+      Failed|Canceled) echo "アプリの作成・変更が失敗しました(状態: $st)"; return 1;;
+    esac
+    [ "$i" = 1 ] && echo "  アプリの処理が終わるのを待っています…"
+    sleep 5
+  done
+  echo "5分待っても終わりませんでした。少し待ってから、もう一度実行してください"; return 1
+}
+wait_ready
 
 grant() {  # $1=相手のオブジェクトID $2=ロール $3=範囲
   if [ -z "$(az role assignment list --assignee "$1" --role "$2" --scope "$3" --query '[0].id' -o tsv)" ]; then
@@ -79,9 +95,13 @@ grant "$PRINCIPAL" "Cost Management Reader" "/subscriptions/${SUB}"
 echo "  サブスクリプションのコスト管理の閲覧者"
 
 echo "== Claude からの通信だけを通す"
-az containerapp ingress access-restriction set -n "$APP" -g "$RG" \
-  --rule-name anthropic --ip-address "$ANTHROPIC_IPS" --action Allow \
-  --description "Claude connectors" -o none
+wait_ready
+if [ -z "$(az containerapp ingress access-restriction list -n "$APP" -g "$RG" --query "[?name=='anthropic'].name" -o tsv 2>/dev/null)" ]; then
+  az containerapp ingress access-restriction set -n "$APP" -g "$RG" \
+    --rule-name anthropic --ip-address "$ANTHROPIC_IPS" --action Allow \
+    --description "Claude connectors" -o none
+  wait_ready
+fi
 
 echo "== GitHub からの自動入れ替え(このリポジトリの main からだけ、${RG} の中だけ)"
 CLIENT_ID=$(az ad app list --display-name "$DEPLOY_NAME" --query "[0].appId" -o tsv)
